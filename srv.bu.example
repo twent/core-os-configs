@@ -1,0 +1,160 @@
+variant: fcos
+version: 1.3.0
+
+passwd:
+  users:
+    - name: root
+      ssh_authorized_keys:
+        - {$SSH_KEY}
+
+    - name: username
+      ssh_authorized_keys:
+        - {$SSH_KEY}
+      groups:                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          
+        - wheel
+
+storage:
+  disks:
+    - device: /dev/sda
+      wipe_table: true
+      partitions:
+        - number: 1
+          label: var
+
+  filesystems:
+    - path: /var
+      device: /dev/disk/by-partlabel/var
+      format: btrfs
+      wipe_filesystem: true
+      label: var
+      with_mount_unit: true
+
+  links:
+    - path: /etc/localtime
+      target: ../usr/share/zoneinfo/Europe/Minsk
+
+  files:
+    - path: /etc/hostname
+      mode: 0644
+      contents:
+        inline: |
+          srv
+    - path: /etc/NetworkManager/system-connections/nic0.nmconnection
+      mode: 0600
+      overwrite: true
+      contents:
+        inline: |
+          [connection]
+          id=nic0
+          type=ethernet
+          interface-name=nic0
+
+          [ipv4]
+          method=manual
+          addresses=YOUR-SERVER-IP/24
+          gateway=192.168.0.1
+          dns=8.8.8.8;1.1.1.1
+          dns-search=google.com
+          may-fail=false
+    - path: /etc/selinux/config
+      contents:
+        inline: |
+          SELINUX=permissive
+          SELINUXTYPE=targeted
+      mode: 0664
+      overwrite: true
+
+    - path: /etc/sysconfig/nftables.conf
+      contents:
+        inline: |
+          flush ruleset;
+
+          table inet filter {
+            chain input {
+              type filter hook input priority 0; policy drop;
+
+              ct state { established, related } accept;
+              ct state invalid drop;
+
+              iif lo accept;
+
+              ip6 nexthdr icmpv6 icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept;
+              ip protocol icmp icmp type { destination-unreachable, router-advertisement, time-exceeded, parameter-problem } accept;
+
+              ip6 nexthdr icmpv6 icmpv6 type echo-request limit rate 10/second accept;
+              ip protocol icmp icmp type echo-request limit rate 10/second accept;
+
+              # Allow SSH
+              tcp dport ssh limit rate 10/minute accept;
+
+              # Allow Cockpit
+              tcp dport 9090 accept;
+
+              # Allow HTTP and HTTPS
+              tcp dport { http, https } accept;
+            }
+          }
+      mode: 0600
+      overwrite: true
+
+systemd:
+  units:
+    - name: sshd.service
+      enabled: true
+
+    - name: podman.socket
+      enabled: true
+
+    - name: podman.service
+      enabled: true
+
+    - name: cockpit.socket
+      enabled: true
+
+    - name: container-update.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Podman auto update containers
+
+        [Service]
+        Type=oneshot
+
+        ExecStart=/usr/bin/podman auto-update
+        ExecStartPost=/usr/bin/podman container prune --force
+        ExecStartPost=/usr/bin/podman image prune --all --force
+        
+        [Install]
+        WantedBy=multi-user.target default.target
+
+    - name: container-update.timer
+      enabled: true
+      contents: |
+        [Unit]
+        Description=daily update containers
+
+        [Timer]
+        OnCalendar=*-*-* 00:00:00
+        Persistent=true
+        RandomizedDelaySec=2h
+
+        [Install]
+        WantedBy=timers.target
+
+    - name: firstboot-wifi.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Configures WiFi if requested on first-boot.
+        After=NetworkManager.service
+        ConditionPathExists=/boot/wifi.txt
+        [Service]
+        Type=oneshot
+        EnvironmentFile=/boot/wifi.txt
+        PreExecStart=-/usr/bin/rpm-ostree install --apply-live bcm283x-firmware.aarch64 NetworkManager-wifi.aarch64
+        PreExecStart=-/usr/bin/systemctl restart NetworkManager
+        PreExecStart=-/usr/bin/sleep 10
+        ExecStart=/usr/bin/nmcli dev wifi connect ${SSID} password ${PASSPHRASE}
+        ExecStopPort=/usr/bin/rm /boot/wifi.txt
+        [Install]
+        WantedBy=multi-user.target default.target
